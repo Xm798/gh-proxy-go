@@ -4,5 +4,6 @@
   "blackList": [
     "example3",
     "example4"
-  ]
+  ],
+  "forceEnUSForRaw": false
 }

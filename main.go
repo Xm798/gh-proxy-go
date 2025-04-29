@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -35,8 +36,9 @@ var (
 )
 
 type Config struct {
-	WhiteList []string `json:"whiteList"`
-	BlackList []string `json:"blackList"`
+	WhiteList       []string `json:"whiteList"`
+	BlackList       []string `json:"blackList"`
+	ForceEnUSForRaw bool     `json:"forceEnUSForRaw"`
 }
 
 func main() {
@@ -112,6 +114,46 @@ func handler(c *gin.Context) {
 	proxy(c, rawPath)
 }
 
+func processReqHeaders(req *http.Request, originalHeaders http.Header, url string) {
+	for key, values := range originalHeaders {
+		for _, value := range values {
+			if config.ForceEnUSForRaw && key == "Accept-Language" &&
+				strings.Contains(url, "raw.githubusercontent.com") &&
+				strings.Contains(value, "zh-CN") {
+				req.Header.Add(key, "en-US")
+			} else {
+				req.Header.Add(key, value)
+			}
+		}
+	}
+	req.Header.Del("Host")
+}
+
+// processRespHeaders processes and modifies response headers
+func processRespHeaders(c *gin.Context, resp *http.Response) {
+	// Remove security-related headers
+	resp.Header.Del("Content-Security-Policy")
+	resp.Header.Del("Referrer-Policy")
+	resp.Header.Del("Strict-Transport-Security")
+
+	// Copy all headers to response
+	for key, values := range resp.Header {
+		for _, value := range values {
+			c.Header(key, value)
+		}
+	}
+
+	// Handle Location header for redirects
+	if location := resp.Header.Get("Location"); location != "" {
+		if checkURL(location) != nil {
+			c.Header("Location", "/"+location)
+		} else {
+			proxy(c, location)
+			return
+		}
+	}
+}
+
 func proxy(c *gin.Context, u string) {
 	req, err := http.NewRequest(c.Request.Method, u, c.Request.Body)
 	if err != nil {
@@ -119,12 +161,7 @@ func proxy(c *gin.Context, u string) {
 		return
 	}
 
-	for key, values := range c.Request.Header {
-		for _, value := range values {
-			req.Header.Add(key, value)
-		}
-	}
-	req.Header.Del("Host")
+	processReqHeaders(req, c.Request.Header, u)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -132,10 +169,7 @@ func proxy(c *gin.Context, u string) {
 		return
 	}
 	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-
-		}
+		_ = Body.Close()
 	}(resp.Body)
 
 	if contentLength, ok := resp.Header["Content-Length"]; ok {
@@ -145,24 +179,7 @@ func proxy(c *gin.Context, u string) {
 		}
 	}
 
-	resp.Header.Del("Content-Security-Policy")
-	resp.Header.Del("Referrer-Policy")
-	resp.Header.Del("Strict-Transport-Security")
-
-	for key, values := range resp.Header {
-		for _, value := range values {
-			c.Header(key, value)
-		}
-	}
-
-	if location := resp.Header.Get("Location"); location != "" {
-		if checkURL(location) != nil {
-			c.Header("Location", "/"+location)
-		} else {
-			proxy(c, location)
-			return
-		}
-	}
+	processRespHeaders(c, resp)
 
 	c.Status(resp.StatusCode)
 	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
@@ -177,10 +194,7 @@ func loadConfig() {
 		return
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-
-		}
+		_ = file.Close()
 	}(file)
 
 	var newConfig Config
