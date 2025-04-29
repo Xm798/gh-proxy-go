@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -42,6 +43,9 @@ type Config struct {
 }
 
 func main() {
+	log.Println("Starting GitHub Proxy Server...")
+	log.Printf("Listening on %s:%d", host, port)
+
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
@@ -64,6 +68,7 @@ func main() {
 	go func() {
 		for {
 			time.Sleep(10 * time.Minute)
+			log.Println("Reloading configuration...")
 			loadConfig()
 		}
 	}()
@@ -74,9 +79,10 @@ func main() {
 
 	router.NoRoute(handler)
 
+	log.Printf("Server is ready to accept connections on %s:%d", host, port)
 	err := router.Run(fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
-		fmt.Printf("Error starting server: %v\n", err)
+		log.Fatalf("Error starting server: %v", err)
 	}
 }
 
@@ -190,7 +196,7 @@ func proxy(c *gin.Context, u string) {
 func loadConfig() {
 	file, err := os.Open("config.json")
 	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
+		log.Printf("Error loading config: %v", err)
 		return
 	}
 	defer func(file *os.File) {
@@ -200,13 +206,16 @@ func loadConfig() {
 	var newConfig Config
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&newConfig); err != nil {
-		fmt.Printf("Error decoding config: %v\n", err)
+		log.Printf("Error decoding config: %v", err)
 		return
 	}
 
 	configLock.Lock()
 	config = &newConfig
 	configLock.Unlock()
+
+	log.Printf("Configuration loaded successfully - WhiteList: %d items, BlackList: %d items, ForceEnUSForRaw: %v",
+		len(newConfig.WhiteList), len(newConfig.BlackList), newConfig.ForceEnUSForRaw)
 }
 
 func checkURL(u string) []string {
