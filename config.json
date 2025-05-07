@@ -2,7 +2,7 @@
   "host": "0.0.0.0",
   "port": 8080,
   "whiteList": [],
-  "blackList": [""],
+  "blackList": [],
   "forceEnUSForRaw": false,
   "sizeLimit": 10240
 }
