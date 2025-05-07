@@ -21,4 +21,4 @@ docker run -d -p 8080:8080 xm798/gh-proxy-go:latest
 
 注意：`host` 和 `port` 配置不支持热重载，需要重启服务才能生效。其他配置项支持热重载。
 
-如需在 Docker 中自定义配置，请使用 `-v /path/to/config.json:/app/config.json` 挂载配置文件。
+如需在 Docker 中自定义配置，请使用 `-v ./config:/app/config` 挂载配置目录。

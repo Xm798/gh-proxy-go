@@ -1,0 +1,9 @@
+services:
+  gh-proxy-go:
+    image: xm798/gh-proxy-go:latest
+    container_name: gh-proxy-go
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config
+    restart: always
