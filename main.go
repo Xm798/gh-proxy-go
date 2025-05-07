@@ -1,27 +1,33 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 )
 
-const (
-	sizeLimit = 1024 * 1024 * 1024 * 10 // 允许的文件大小，默认10GB
-	host      = "0.0.0.0"               // 监听地址
-	port      = 8080                    // 监听端口
-)
+type StaticConfig struct {
+	Host string `mapstructure:"host" json:"host"`
+	Port int    `mapstructure:"port" json:"port"`
+}
+
+type DynamicConfig struct {
+	WhiteList       []string `mapstructure:"whiteList" json:"whiteList"`
+	BlackList       []string `mapstructure:"blackList" json:"blackList"`
+	ForceEnUSForRaw bool     `mapstructure:"forceEnUSForRaw" json:"forceEnUSForRaw"`
+	SizeLimit       int64    `mapstructure:"sizeLimit" json:"sizeLimit"`
+}
 
 var (
 	exps = []*regexp.Regexp{
@@ -32,19 +38,70 @@ var (
 		regexp.MustCompile(`^(?:https?://)?gist\.github\.com/([^/]+)/.+?/.+$`),
 	}
 	httpClient *http.Client
-	config     *Config
-	configLock sync.RWMutex
+	staticCfg  *StaticConfig
+	dynamicCfg atomic.Value
 )
 
-type Config struct {
-	WhiteList       []string `json:"whiteList"`
-	BlackList       []string `json:"blackList"`
-	ForceEnUSForRaw bool     `json:"forceEnUSForRaw"`
+func initConfig() {
+	viper.SetConfigName("config")
+	viper.SetConfigType("json")
+	viper.AddConfigPath(".")
+
+	// Set default values
+	viper.SetDefault("host", "0.0.0.0")
+	viper.SetDefault("port", 8080)
+	viper.SetDefault("forceEnUSForRaw", false)
+	viper.SetDefault("whiteList", []string{})
+	viper.SetDefault("blackList", []string{})
+	// default size limit: 10240 MB (10GB)
+	viper.SetDefault("sizeLimit", 10240)
+
+	if err := viper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			log.Printf("Config file not found, using defaults")
+		} else {
+			log.Printf("Error reading config file: %v", err)
+		}
+	}
+
+	// Watch config file changes
+	viper.WatchConfig()
+	viper.OnConfigChange(func(e fsnotify.Event) {
+		log.Printf("Config file changed: %s", e.Name)
+		loadDynamicConfig()
+	})
+
+	loadConfig()
+}
+
+func loadConfig() {
+	staticCfg = &StaticConfig{
+		Host: viper.GetString("host"),
+		Port: viper.GetInt("port"),
+	}
+
+	loadDynamicConfig()
+}
+
+func loadDynamicConfig() {
+	newCfg := &DynamicConfig{
+		WhiteList:       viper.GetStringSlice("whiteList"),
+		BlackList:       viper.GetStringSlice("blackList"),
+		ForceEnUSForRaw: viper.GetBool("forceEnUSForRaw"),
+		SizeLimit:       int64(viper.GetInt("sizeLimit")) * 1024 * 1024,
+	}
+	dynamicCfg.Store(newCfg)
+
+	log.Printf("Dynamic configuration loaded - WhiteList: %d items, BlackList: %d items, ForceEnUSForRaw: %v, SizeLimit: %d MB",
+		len(newCfg.WhiteList), len(newCfg.BlackList), newCfg.ForceEnUSForRaw, newCfg.SizeLimit/1024/1024)
 }
 
 func main() {
 	log.Println("Starting GitHub Proxy Server...")
-	log.Printf("Listening on %s:%d", host, port)
+
+	initConfig()
+
+	log.Printf("Listening on %s:%d", staticCfg.Host, staticCfg.Port)
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
@@ -64,23 +121,13 @@ func main() {
 		},
 	}
 
-	loadConfig()
-	go func() {
-		for {
-			time.Sleep(10 * time.Minute)
-			log.Println("Reloading configuration...")
-			loadConfig()
-		}
-	}()
-
 	router.StaticFile("/", "./public/index.html")
 	router.StaticFile("/favicon.ico", "./public/favicon.ico")
 	router.StaticFile("/logo.png", "./public/logo.png")
 
 	router.NoRoute(handler)
 
-	log.Printf("Server is ready to accept connections on %s:%d", host, port)
-	err := router.Run(fmt.Sprintf("%s:%d", host, port))
+	err := router.Run(fmt.Sprintf("%s:%d", staticCfg.Host, staticCfg.Port))
 	if err != nil {
 		log.Fatalf("Error starting server: %v", err)
 	}
@@ -100,30 +147,33 @@ func handler(c *gin.Context) {
 
 	matches := checkURL(rawPath)
 	if matches != nil {
-		if len(config.WhiteList) > 0 && !checkList(matches, config.WhiteList) {
+		cfg := dynamicCfg.Load().(*DynamicConfig)
+		if len(cfg.WhiteList) > 0 && !checkList(matches, cfg.WhiteList) {
 			c.String(http.StatusForbidden, "Forbidden by white list.")
 			return
 		}
-		if len(config.BlackList) > 0 && checkList(matches, config.BlackList) {
+		if len(cfg.BlackList) > 0 && checkList(matches, cfg.BlackList) {
 			c.String(http.StatusForbidden, "Forbidden by black list.")
 			return
 		}
+
+		if exps[1].MatchString(rawPath) {
+			rawPath = strings.Replace(rawPath, "/blob/", "/raw/", 1)
+		}
+
+		proxy(c, rawPath, cfg)
 	} else {
 		c.String(http.StatusForbidden, "Invalid input.")
 		return
 	}
-
-	if exps[1].MatchString(rawPath) {
-		rawPath = strings.Replace(rawPath, "/blob/", "/raw/", 1)
-	}
-
-	proxy(c, rawPath)
 }
 
-func processReqHeaders(req *http.Request, originalHeaders http.Header, url string) {
+func processReqHeaders(req *http.Request, originalHeaders http.Header, url string, cfg *DynamicConfig) {
+	forceEnUS := cfg.ForceEnUSForRaw
+
 	for key, values := range originalHeaders {
 		for _, value := range values {
-			if config.ForceEnUSForRaw && key == "Accept-Language" &&
+			if forceEnUS && key == "Accept-Language" &&
 				strings.Contains(url, "raw.githubusercontent.com") &&
 				strings.Contains(value, "zh-CN") {
 				req.Header.Add(key, "en-US")
@@ -154,20 +204,20 @@ func processRespHeaders(c *gin.Context, resp *http.Response) {
 		if checkURL(location) != nil {
 			c.Header("Location", "/"+location)
 		} else {
-			proxy(c, location)
+			proxy(c, location, dynamicCfg.Load().(*DynamicConfig))
 			return
 		}
 	}
 }
 
-func proxy(c *gin.Context, u string) {
+func proxy(c *gin.Context, u string, cfg *DynamicConfig) {
 	req, err := http.NewRequest(c.Request.Method, u, c.Request.Body)
 	if err != nil {
 		c.String(http.StatusInternalServerError, fmt.Sprintf("server error %v", err))
 		return
 	}
 
-	processReqHeaders(req, c.Request.Header, u)
+	processReqHeaders(req, c.Request.Header, u, cfg)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -179,7 +229,7 @@ func proxy(c *gin.Context, u string) {
 	}(resp.Body)
 
 	if contentLength, ok := resp.Header["Content-Length"]; ok {
-		if size, err := strconv.Atoi(contentLength[0]); err == nil && size > sizeLimit {
+		if size, err := strconv.Atoi(contentLength[0]); err == nil && size > int(cfg.SizeLimit) {
 			c.String(http.StatusRequestEntityTooLarge, "File too large.")
 			return
 		}
@@ -191,31 +241,6 @@ func proxy(c *gin.Context, u string) {
 	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
 		return
 	}
-}
-
-func loadConfig() {
-	file, err := os.Open("config.json")
-	if err != nil {
-		log.Printf("Error loading config: %v", err)
-		return
-	}
-	defer func(file *os.File) {
-		_ = file.Close()
-	}(file)
-
-	var newConfig Config
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&newConfig); err != nil {
-		log.Printf("Error decoding config: %v", err)
-		return
-	}
-
-	configLock.Lock()
-	config = &newConfig
-	configLock.Unlock()
-
-	log.Printf("Configuration loaded successfully - WhiteList: %d items, BlackList: %d items, ForceEnUSForRaw: %v",
-		len(newConfig.WhiteList), len(newConfig.BlackList), newConfig.ForceEnUSForRaw)
 }
 
 func checkURL(u string) []string {

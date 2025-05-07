@@ -1,9 +1,8 @@
 {
-  "whiteList": [
-  ],
-  "blackList": [
-    "example3",
-    "example4"
-  ],
-  "forceEnUSForRaw": false
+  "host": "0.0.0.0",
+  "port": 8080,
+  "whiteList": [],
+  "blackList": [""],
+  "forceEnUSForRaw": false,
+  "sizeLimit": 10240
 }
