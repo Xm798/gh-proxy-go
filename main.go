@@ -45,7 +45,7 @@ var (
 func initConfig() {
 	viper.SetConfigName("config")
 	viper.SetConfigType("json")
-	viper.AddConfigPath(".")
+	viper.AddConfigPath("./config")
 
 	// Set default values
 	viper.SetDefault("host", "0.0.0.0")
