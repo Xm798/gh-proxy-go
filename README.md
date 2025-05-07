@@ -14,8 +14,8 @@ docker run -d -p 8080:8080 xm798/gh-proxy-go:latest
 
 - `host`: 默认 "0.0.0.0"，服务器监听地址
 - `port`: 默认 8080，服务器监听端口
-- `whiteList`: 允许访问的 GitHub 用户/组织列表
-- `blackList`: 禁止访问的 GitHub 用户/组织列表
+- `whiteList`: 允许访问的 GitHub 用户/组织列表，配置后将拒绝**所有未在列表中**的请求
+- `blackList`: 禁止访问的 GitHub 用户/组织列表，配置后将拒绝所有在列表中的请求
 - `forceEnUSForRaw`: 默认 `false`，是否强制使用 en-US 语言访问 raw.githubusercontent.com，以规避中文用户可能的 429 错误
 - `sizeLimit`: 默认 10240，文件大小限制（单位：MB）
 

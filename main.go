@@ -149,11 +149,13 @@ func handler(c *gin.Context) {
 	if matches != nil {
 		cfg := dynamicCfg.Load().(*DynamicConfig)
 		if len(cfg.WhiteList) > 0 && !checkList(matches, cfg.WhiteList) {
-			c.String(http.StatusForbidden, "Forbidden by white list.")
+			log.Printf("Access denied by white list rules: %s", rawPath)
+			c.String(http.StatusForbidden, "Access denied.")
 			return
 		}
 		if len(cfg.BlackList) > 0 && checkList(matches, cfg.BlackList) {
-			c.String(http.StatusForbidden, "Forbidden by black list.")
+			log.Printf("Access denied by black list rules: %s", rawPath)
+			c.String(http.StatusForbidden, "Access denied.")
 			return
 		}
 
