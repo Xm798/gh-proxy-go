@@ -18,7 +18,6 @@ FROM --platform=$TARGETPLATFORM alpine:latest
 WORKDIR /app
 
 COPY --from=builder /app/gh-proxy-go .
-COPY --from=builder /app/config.json .
 COPY --from=builder /app/public ./public
 
 EXPOSE 8080
