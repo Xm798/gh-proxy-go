@@ -139,9 +139,9 @@ func handler(c *gin.Context) {
 		rawPath = strings.TrimPrefix(rawPath, "/")
 	}
 
-	if !strings.HasPrefix(rawPath, "http") {
-		c.String(http.StatusForbidden, "Invalid input.")
-		return
+	// Add https:// prefix if missing
+	if !strings.HasPrefix(rawPath, "http://") && !strings.HasPrefix(rawPath, "https://") {
+		rawPath = "https://" + rawPath
 	}
 
 	matches := checkURL(rawPath)
