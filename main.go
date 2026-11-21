@@ -37,6 +37,7 @@ var (
 		regexp.MustCompile(`^(?:https?://)?raw\.github(?:usercontent|)\.com/([^/]+)/([^/]+)/.+?/.+$`),
 		regexp.MustCompile(`^(?:https?://)?gist\.github\.com/([^/]+)/.+?/.+$`),
 	}
+	schemeExp  = regexp.MustCompile(`^(https?):/+`)
 	httpClient *http.Client
 	staticCfg  *StaticConfig
 	dynamicCfg atomic.Value
@@ -139,8 +140,10 @@ func handler(c *gin.Context) {
 		rawPath = strings.TrimPrefix(rawPath, "/")
 	}
 
-	// Add https:// prefix if missing
-	if !strings.HasPrefix(rawPath, "http://") && !strings.HasPrefix(rawPath, "https://") {
+	// Reverse proxies (Traefik sanitizePath, nginx merge_slashes) collapse "https://" in the path to "https:/".
+	if loc := schemeExp.FindStringSubmatchIndex(rawPath); loc != nil {
+		rawPath = rawPath[loc[2]:loc[3]] + "://" + rawPath[loc[1]:]
+	} else {
 		rawPath = "https://" + rawPath
 	}
 
